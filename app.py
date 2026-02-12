@@ -1,66 +1,53 @@
 from flask import Flask, render_template, request, jsonify
-from chatbot_model import HealthcareChatbot
-import traceback
+from flask_cors import CORS
+from chatbot import check_pattern, training_cols, predict_initial, predict_final
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(__name__)
+CORS(app)
 
-# Initialize the chatbot model
-try:
-    bot = HealthcareChatbot()
-    print("Chatbot model initialized successfully.")
-except Exception as e:
-    print(f"Error initializing chatbot model: {e}")
-    traceback.print_exc()
-
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/get_symptoms', methods=['GET'])
-def get_symptoms():
-    return jsonify({'symptoms': bot.get_all_symptoms()})
+@app.route("/check_pattern", methods=["POST"])
+def handle_check_pattern():
+    pattern = request.json.get("pattern")
+    conf, matches = check_pattern(training_cols, pattern)
+    return jsonify({"matches": matches})
 
-@app.route('/check_pattern', methods=['POST'])
-def check_pattern():
-    data = request.get_json()
-    pattern = data.get('pattern', '')
-    matches = bot.check_pattern(pattern)
-    return jsonify({'matches': matches})
+@app.route("/predict_initial", methods=["POST"])
+def handle_predict_initial():
+    symptom = request.json.get("symptom")
+    try:
+        predicted_disease, related_symptoms = predict_initial(symptom)
+        return jsonify({
+            "predicted_disease": predicted_disease[0],
+            "related_symptoms": related_symptoms
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/predict_initial', methods=['POST'])
-def predict_initial():
-    data = request.get_json()
-    symptom = data.get('symptom')
-    if not symptom:
-        return jsonify({'error': 'Symptom is required'}), 400
+@app.route("/predict_final", methods=["POST"])
+def handle_predict_final():
+    initial_disease = request.json.get("initial_disease")
+    symptoms_exp = request.json.get("symptoms_exp")
+    days = request.json.get("days")
     
     try:
-        result = bot.get_symptom_tree_info(symptom)
-        return jsonify(result)
+        text, desc1, desc2, precautions, severity, specialist1, specialist2 = predict_final(
+            initial_disease, symptoms_exp, days
+        )
+        return jsonify({
+            "text": text,
+            "description_present": desc1,
+            "description_second": desc2,
+            "precautions": precautions,
+            "severity_message": severity,
+            "specialist_present": specialist1,
+            "specialist_second": specialist2,
+        })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/predict_final', methods=['POST'])
-def predict_final():
-    data = request.get_json()
-    initial_disease = data.get('initial_disease')
-    symptoms_exp = data.get('symptoms_exp') # List of confirmed symptoms
-    days = data.get('days', 0)
-    
-    if not initial_disease or not symptoms_exp:
-        return jsonify({'error': 'Initial disease and symptoms are required'}), 400
-        
-    try:
-        # User entered days as integer or string
-        try:
-            days = int(days)
-        except:
-            days = 1
-            
-        result = bot.final_prediction(initial_disease, symptoms_exp, days)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001, debug=True)
