@@ -12,6 +12,8 @@ let potentialDisease = "";
 let finalSymptoms = [];
 let voiceEnabled = false;
 let isBotSpeaking = false;
+let latestSpeechText = "";
+let hasSubmittedFinalSpeech = false;
 
 // --- SPEECH RECOGNITION SETUP ---
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -35,26 +37,47 @@ if (SpeechRecognition) {
     };
 
     recognition.onresult = function (event) {
-        // CHANGE 2: Handle partial results
-        let transcript = '';
+        // Keep final transcript so we can reliably submit what user said.
+        let interimTranscript = '';
+        let finalTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
-            transcript += event.results[i][0].transcript;
+            const text = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalTranscript += text;
+            } else {
+                interimTranscript += text;
+            }
         }
-
-        console.log("Heard:", transcript);
+        latestSpeechText = (finalTranscript || interimTranscript).trim();
+        console.log("Heard:", latestSpeechText);
 
         // Show text immediately in the box
         if (!isBotSpeaking) {
-            inputField.value = transcript;
+            inputField.value = latestSpeechText;
+        }
+
+        // Submit immediately when we receive final speech to avoid onend timing misses.
+        if (voiceEnabled && !isBotSpeaking && finalTranscript.trim().length > 0) {
+            hasSubmittedFinalSpeech = true;
+            inputField.value = finalTranscript.trim();
+            handleInput();
+            latestSpeechText = "";
         }
     };
 
     recognition.onend = function () {
         // When you stop talking, we verify if we should send it or restart
         if (voiceEnabled && !isBotSpeaking) {
-            // If we have text in the box, send it automatically!
-            if (inputField.value.trim().length > 0) {
+            if (hasSubmittedFinalSpeech) {
+                hasSubmittedFinalSpeech = false;
+                return;
+            }
+            // Use latest speech result first; fallback to current input value.
+            const spoken = latestSpeechText || inputField.value.trim();
+            if (spoken.length > 0) {
+                inputField.value = spoken;
                 handleInput();
+                latestSpeechText = "";
             } else {
                 // If silence, just restart listening
                 try { recognition.start(); } catch (e) { }
@@ -87,12 +110,21 @@ function toggleVoice() {
     voiceEnabled = !voiceEnabled;
 
     if (voiceEnabled) {
-        try { recognition.start(); } catch (e) { console.error(e); }
-        // Don't use speak() here to avoid triggering the "bot speaking" lock immediately
+        latestSpeechText = "";
+        hasSubmittedFinalSpeech = false;
+
+        // If user enables voice at the beginning, speak the start prompt once.
+        if (step === 0) {
+            speak("Hello. I am your AI Health Assistant. Please say your name to begin.");
+        } else {
+            try { recognition.start(); } catch (e) { console.error(e); }
+        }
     } else {
         voiceBtn.textContent = "Voice: OFF";
         voiceBtn.classList.remove("active");
         voiceBtn.style.backgroundColor = "transparent";
+        latestSpeechText = "";
+        hasSubmittedFinalSpeech = false;
         recognition.stop();
         window.speechSynthesis.cancel();
     }
@@ -193,6 +225,25 @@ async function handleInput() {
             }
         } else {
             addMessage("I didn't catch that. Try 'fever' or 'cough'.", 'bot');
+        }
+    } else if (step === 2) {
+        // Accept typed symptoms while checkbox suggestions are displayed.
+        const normalizedVal = val.toLowerCase().replace(/[^\w\s]/g, '').trim();
+        if (["no", "none", "nope", "nothing", "no thanks", "thats all", "that's all"].includes(normalizedVal)) {
+            addMessage("How many days have you been sick?", 'bot');
+            step = 3;
+            return;
+        }
+
+        const data = await postData('/check_pattern', { pattern: val });
+        const newMatches = data.matches.filter(s => !finalSymptoms.includes(s));
+
+        if (newMatches.length > 0) {
+            finalSymptoms.push(...newMatches);
+            addMessage(`Added: ${newMatches.join(", ")}.`, 'bot');
+            addMessage("Any other symptom? If not, say or type 'no'.", 'bot');
+        } else {
+            addMessage("I couldn't map that symptom. Say or type another one, or say/type 'no' to continue.", 'bot');
         }
     } else if (step === 3) {
         const days = parseInt(val);

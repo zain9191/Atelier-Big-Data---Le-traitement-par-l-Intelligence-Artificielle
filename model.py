@@ -2,6 +2,7 @@ import pandas as pd
 from sklearn import preprocessing
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 import joblib
 import os
 
@@ -21,11 +22,21 @@ def train_model():
     le.fit(y)
     y_encoded = le.transform(y)
 
-    x_train, x_test, y_train, y_test = train_test_split(x, y_encoded, test_size=0.33, random_state=42)
+    x_train, x_test, y_train, y_test = train_test_split(
+        x,
+        y_encoded,
+        test_size=0.33,
+        random_state=42,
+        stratify=y_encoded
+    )
 
     print("Training Decision Tree...")
     clf = DecisionTreeClassifier()
     clf.fit(x_train, y_train)
+
+    y_pred = clf.predict(x_test)
+    test_accuracy = accuracy_score(y_test, y_pred)
+    print(f"Test accuracy: {test_accuracy:.4f}")
 
     if not os.path.exists('saved_model'):
         os.makedirs('saved_model')
